@@ -21,12 +21,44 @@ from .design_checks import run_all_checks
 from .report_generator import generate_report
 
 
+def check_password():
+    """Simple password gate. Returns True if the user has entered the correct password."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.title("Timber Beam Designer")
+    st.caption("NZS AS 1720.1:2022 -- Simply Supported Beam")
+    st.divider()
+
+    # Get password from secrets.toml or fallback
+    try:
+        correct_password = st.secrets["password"]
+    except (KeyError, FileNotFoundError):
+        correct_password = "magnitude2024"
+
+    password = st.text_input("Enter access password:", type="password")
+    if st.button("Login", type="primary"):
+        if password == correct_password:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password. Please try again.")
+    return False
+
+
 def main():
     st.set_page_config(
         page_title="Timber Beam Designer",
         page_icon="\U0001FAB5",
         layout="wide",
     )
+
+    # ── Password gate ──
+    if not check_password():
+        return
 
     st.title("Timber Beam Designer")
     st.caption("NZS AS 1720.1:2022 -- Simply Supported Beam")
