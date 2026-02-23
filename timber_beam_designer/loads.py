@@ -103,6 +103,39 @@ class LineLoads:
         return "1.2G + 1.5Q"
 
 
+@dataclass
+class PointLoad:
+    """A single concentrated point load on the beam.
+    User provides pre-factored ULS and SLS values directly (not split into G/Q).
+    """
+    P_uls: float   # ULS point load (kN)
+    P_sls: float   # SLS point load (kN)
+    a_m: float     # distance from left support (m)
+
+    def calc_b(self, span_m: float) -> float:
+        """Distance from right support = L - a."""
+        return span_m - self.a_m
+
+    def validate(self, span_m: float) -> bool:
+        """Check that point load position is within the span."""
+        return 0.0 < self.a_m < span_m
+
+
+@dataclass
+class PointLoadOverhang(PointLoad):
+    """Point load on the cantilever overhang of an overhanging beam.
+    a_m = distance from R2 support (interior support), NOT from R1.
+    """
+
+    def calc_b(self, cant_span_m: float) -> float:
+        """Distance from free end = cantilever span - a."""
+        return cant_span_m - self.a_m
+
+    def validate(self, cant_span_m: float) -> bool:
+        """Check that point load position is within the overhang."""
+        return 0.0 < self.a_m <= cant_span_m
+
+
 def calc_self_weight(b_mm: float, d_mm: float, density_kg_m3: float) -> float:
     """
     Beam self-weight as a line load (kN/m).
