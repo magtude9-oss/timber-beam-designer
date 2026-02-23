@@ -43,21 +43,27 @@ def _get_logo_path():
 class TimberBeamReport(FPDF):
     """Mathcad-inspired engineering calculation report."""
 
-    # Font family names used throughout
+    # Font family names — set dynamically in __init__ based on OS
     FONT_SANS = "LeelawadeeUI"
-    FONT_MONO = "LeelawadeeUI"   # use same font for calcs too
+    FONT_MONO = "LeelawadeeUI"
 
     def __init__(self, project_info: dict, logo_path: str):
         super().__init__()
         self.project_info = project_info
         self.logo_path = logo_path
 
-        # Register Leelawadee UI font family
+        # Try Windows Leelawadee UI first; fall back to built-in Helvetica
+        # (Streamlit Cloud runs Linux where Windows fonts aren't available)
         font_dir = r"C:\Windows\Fonts"
-        self.add_font(self.FONT_SANS, "",  os.path.join(font_dir, "LeelawUI.ttf"))
-        self.add_font(self.FONT_SANS, "B", os.path.join(font_dir, "LeelaUIb.ttf"))
-        # No italic variant available — map italic to regular
-        self.add_font(self.FONT_SANS, "I", os.path.join(font_dir, "LeelawUI.ttf"))
+        leelawui = os.path.join(font_dir, "LeelawUI.ttf")
+        if os.path.exists(leelawui):
+            self.add_font(self.FONT_SANS, "",  leelawui)
+            self.add_font(self.FONT_SANS, "B", os.path.join(font_dir, "LeelaUIb.ttf"))
+            self.add_font(self.FONT_SANS, "I", leelawui)
+        else:
+            # Use fpdf2 built-in fonts (no file needed)
+            TimberBeamReport.FONT_SANS = "Helvetica"
+            TimberBeamReport.FONT_MONO = "Courier"
 
     def header(self):
         if self.logo_path and os.path.exists(self.logo_path):
