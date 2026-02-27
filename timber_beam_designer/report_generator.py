@@ -1099,6 +1099,11 @@ def _render_single_beam(pdf, inputs, beam_actions, section, grade_name,
     # ═══════════════════════════════════════════════════════════════
     # SECTION 5 — Results Summary
     # ═══════════════════════════════════════════════════════════════
+    # Estimate space needed: heading(~8) + header row(4.5) + data rows(4.5 each)
+    # + gap(2) + verdict box(12) + margin
+    results_height = 8 + 4.5 + len(results) * 4.5 + 2 + 12 + 4
+    if pdf._space_left() < results_height:
+        pdf.add_page()
     pdf.section_heading(5, "Results Summary")
 
     # Table
@@ -1132,7 +1137,7 @@ def _render_single_beam(pdf, inputs, beam_actions, section, grade_name,
             pdf.set_text_color(*CLR_BLACK)
             pdf.set_font(pdf.FONT_MONO, "", 7)
         pdf.ln()
-    pdf.ln(3)
+    pdf.ln(2)
 
     # Overall verdict box
     all_passed = all(r.passed for r in results)

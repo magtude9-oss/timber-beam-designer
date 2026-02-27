@@ -217,6 +217,14 @@ def main():
 
         current_beam = beams[active_idx]
 
+        # ── Restore widget states when switching back to this beam ──
+        # Streamlit deletes session_state keys for widgets that are not rendered.
+        # When the user switches beams, the old beam's widget keys are deleted.
+        # We restore them from the beam's saved_inputs dict so values are preserved.
+        for _k, _v in current_beam.get("saved_inputs", {}).items():
+            if _k not in st.session_state:
+                st.session_state[_k] = _v
+
         # Editable beam name
         current_beam["name"] = st.text_input(
             "Beam Name",
@@ -521,6 +529,7 @@ def main():
                     )
                 with col_b_disp:
                     b_val = back_span_m - a_val
+                    st.session_state[f"b{active_idx}_back_p_b_display_{i}"] = f"{b_val:.2f}"
                     st.text_input(
                         "Distance from R2 (m)",
                         value=f"{b_val:.2f}",
@@ -574,6 +583,7 @@ def main():
                     )
                 with col_b_disp:
                     b_val = cant_span_m - a_val
+                    st.session_state[f"b{active_idx}_cant_p_b_display_{i}"] = f"{b_val:.2f}"
                     st.text_input(
                         "From free end (m)",
                         value=f"{b_val:.2f}",
@@ -629,6 +639,7 @@ def main():
                     )
                 with col_b_disp:
                     b_val = span_m - a_val
+                    st.session_state[f"b{active_idx}_p_b_display_{i}"] = f"{b_val:.2f}"
                     st.text_input(
                         f"P{i + 1} from right support (m)",
                         value=f"{b_val:.2f}",
@@ -919,6 +930,15 @@ def main():
     })
     if is_overhanging:
         current_beam["line_loads_cant"] = line_loads_cant
+
+    # ── Persist widget states so they survive beam switches ──
+    # Save all session_state keys belonging to this beam into its dict.
+    # This ensures values are available for restoration when the user returns.
+    _pfx = f"b{active_idx}_"
+    current_beam["saved_inputs"] = {
+        k: v for k, v in st.session_state.items()
+        if isinstance(k, str) and k.startswith(_pfx)
+    }
 
     # ── Main Area: Results ───────────────────────────────────────────
     if all_passed:

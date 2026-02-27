@@ -21,6 +21,7 @@ LOAD_TYPES = {
     "Ground Floor": {"live_kpa": 1.5, "trib_mode": "dual"},
     "First Floor Wall": {"live_kpa": 0.0, "trib_mode": "single"},
     "Ground Floor Wall": {"live_kpa": 0.0, "trib_mode": "single"},
+    "Deck": {"live_kpa": 2.0, "trib_mode": "single"},
 }
 
 
