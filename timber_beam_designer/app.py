@@ -177,6 +177,21 @@ def main():
     beams = st.session_state.beams
     active_idx = st.session_state.active_beam_idx
 
+    # ── Save beam widget states at the TOP of every render ──────────
+    # CRITICAL: st.rerun() aborts the script immediately, so any save
+    # logic at the bottom of the script never runs when switching beams
+    # or clicking "Add Beam". By saving HERE (before any buttons are
+    # processed), we capture the correct widget values from the previous
+    # render before they are cleaned up by Streamlit.
+    # We only overwrite a beam's saved_inputs if its keys are present in
+    # session_state (i.e. it was the active beam last render).
+    for _bi, _beam in enumerate(beams):
+        _pfx = f"b{_bi}_"
+        _snap = {k: v for k, v in st.session_state.items()
+                 if isinstance(k, str) and k.startswith(_pfx)}
+        if _snap:
+            _beam["saved_inputs"] = _snap
+
     # ── Sidebar ────────────────────────────────────────────────────
     with st.sidebar:
         # ── Beam List ──
