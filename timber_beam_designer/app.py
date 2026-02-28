@@ -12,6 +12,12 @@ import tempfile
 import os
 from datetime import date
 
+from .database import (
+    init_db, verify_password, get_user,
+    get_projects, get_project, create_project, update_project, delete_project,
+    get_all_projects, get_all_users, create_user, delete_user, change_password,
+    save_beams, load_beams, get_beam_count,
+)
 from .material_data import (
     TIMBER_GRADES, K1_FACTORS, get_grade,
     K4_DRY, K6_DEFAULT, get_dropdown_grades,
@@ -28,32 +34,222 @@ from .design_checks import run_all_checks
 from .report_generator import generate_report, generate_multi_beam_report
 
 
-def check_password():
-    """Simple password gate. Returns True if the user has entered the correct password."""
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
+def _auto_save():
+    """Save current beams to the database if a project is open."""
+    proj = st.session_state.get("current_project")
+    beams = st.session_state.get("beams")
+    if proj and beams:
+        save_beams(proj["id"], beams)
 
-    if st.session_state.authenticated:
-        return True
 
-    st.title("Timber Beam Designer")
-    st.caption("NZS AS 1720.1:2022 -- Timber Beam Design")
+def _load_project_beams(project_id: int):
+    """Load beams from DB into session_state, merging with defaults."""
+    raw_beams = load_beams(project_id)
+    if raw_beams:
+        loaded = []
+        for raw in raw_beams:
+            b = default_beam_state()
+            b.update(raw)
+            loaded.append(b)
+        st.session_state.beams = loaded
+    else:
+        st.session_state.beams = [default_beam_state()]
+    st.session_state.active_beam_idx = 0
+
+
+# ══════════════════════════════════════════════════════════════════
+# Login Screen
+# ══════════════════════════════════════════════════════════════════
+
+def render_login():
+    st.title("🪵 Timber Beam Designer")
+    st.caption("NZS AS 1720.1:2022 — Timber Beam Design")
     st.divider()
 
-    # Get password from secrets.toml or fallback
-    try:
-        correct_password = st.secrets["password"]
-    except (KeyError, FileNotFoundError):
-        correct_password = "magnitude2024"
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.subheader("Login")
+        username = st.text_input("Username", key="login_username")
+        password = st.text_input("Password", type="password", key="login_password")
 
-    password = st.text_input("Enter access password:", type="password")
-    if st.button("Login", type="primary"):
-        if password == correct_password:
-            st.session_state.authenticated = True
+        if st.button("Login", type="primary", use_container_width=True):
+            user = get_user(username.strip())
+            if user and verify_password(password, user["password_hash"]):
+                st.session_state.user = user
+                st.session_state.page = "dashboard"
+                st.rerun()
+            else:
+                st.error("Incorrect username or password.")
+
+
+# ══════════════════════════════════════════════════════════════════
+# Project Dashboard
+# ══════════════════════════════════════════════════════════════════
+
+def render_project_dashboard():
+    user = st.session_state.user
+
+    # Header row
+    col_title, col_admin, col_logout = st.columns([5, 1, 1])
+    with col_title:
+        st.title("🪵 Timber Beam Designer")
+        st.caption(f"Logged in as **{user['username']}**")
+    with col_admin:
+        if user.get("is_admin"):
+            if st.button("⚙️ Admin", use_container_width=True):
+                st.session_state.page = "admin"
+                st.rerun()
+    with col_logout:
+        if st.button("Logout", use_container_width=True):
+            st.session_state.clear()
             st.rerun()
-        else:
-            st.error("Incorrect password. Please try again.")
-    return False
+
+    st.divider()
+    st.header("My Projects")
+
+    # ── New project form ──
+    with st.expander("➕ Create New Project", expanded=False):
+        with st.form("new_project_form", clear_on_submit=True):
+            nf_col1, nf_col2 = st.columns(2)
+            with nf_col1:
+                np_name     = st.text_input("Project Name *", placeholder="e.g. 5 University Ave Upgrade")
+                np_num      = st.text_input("Project Number", placeholder="e.g. 65048")
+                np_addr     = st.text_input("Project Address")
+            with nf_col2:
+                np_designer = st.text_input("Designer Name")
+                np_date     = st.date_input("Date", value=date.today())
+
+            if st.form_submit_button("✅ Create Project", type="primary"):
+                if not np_name.strip():
+                    st.error("Project name is required.")
+                else:
+                    pid = create_project(
+                        user["id"], np_name.strip(), np_num, np_addr,
+                        np_designer, np_date.isoformat(),
+                    )
+                    st.session_state.current_project = get_project(pid)
+                    _load_project_beams(pid)
+                    st.session_state.page = "designer"
+                    st.rerun()
+
+    # ── Existing projects list ──
+    projects = get_projects(user["id"])
+    if not projects:
+        st.info("No projects yet. Create your first project above.")
+        return
+
+    for proj in projects:
+        beam_count = get_beam_count(proj["id"])
+        updated    = proj["updated_at"][:10] if proj.get("updated_at") else "—"
+
+        with st.container(border=True):
+            pcol1, pcol2, pcol3 = st.columns([4, 3, 1])
+            with pcol1:
+                st.markdown(f"**{proj['name']}**")
+                parts = []
+                if proj.get("number"):  parts.append(f"No. {proj['number']}")
+                if proj.get("address"): parts.append(proj["address"])
+                if parts:
+                    st.caption(" | ".join(parts))
+            with pcol2:
+                des = proj.get("designer", "—") or "—"
+                st.caption(f"Designer: {des}")
+                st.caption(f"{beam_count} beam(s)  ·  Last saved: {updated}")
+            with pcol3:
+                if st.button("Open →", key=f"open_{proj['id']}", type="primary", use_container_width=True):
+                    st.session_state.current_project = proj
+                    _load_project_beams(proj["id"])
+                    st.session_state.page = "designer"
+                    st.rerun()
+                if st.button("🗑️", key=f"del_{proj['id']}", use_container_width=True,
+                             help="Delete this project"):
+                    delete_project(proj["id"])
+                    st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Admin Dashboard
+# ══════════════════════════════════════════════════════════════════
+
+def render_admin_dashboard():
+    col_back, col_title = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back"):
+            st.session_state.page = "dashboard"
+            st.rerun()
+    with col_title:
+        st.title("⚙️ Admin Panel")
+
+    st.divider()
+
+    # ── Users ──
+    st.header("Users")
+
+    with st.expander("➕ Add New User"):
+        with st.form("add_user_form", clear_on_submit=True):
+            au_col1, au_col2 = st.columns(2)
+            with au_col1:
+                au_username = st.text_input("Username")
+                au_password = st.text_input("Password", type="password")
+            with au_col2:
+                au_is_admin = st.checkbox("Grant admin access")
+            if st.form_submit_button("Create User", type="primary"):
+                if not au_username.strip() or not au_password:
+                    st.error("Username and password are required.")
+                elif create_user(au_username.strip(), au_password, au_is_admin):
+                    st.success(f"User '{au_username}' created.")
+                    st.rerun()
+                else:
+                    st.error(f"Username '{au_username}' already exists.")
+
+    users = get_all_users()
+    for u in users:
+        with st.container(border=True):
+            uc1, uc2, uc3 = st.columns([3, 3, 2])
+            with uc1:
+                badge = " 👑 Admin" if u["is_admin"] else ""
+                st.markdown(f"**{u['username']}**{badge}")
+            with uc2:
+                p_count = len(get_projects(u["id"]))
+                st.caption(f"{p_count} project(s)  ·  Joined: {u['created_at'][:10]}")
+            with uc3:
+                if u["username"] != "admin":
+                    if st.button("Delete", key=f"del_user_{u['id']}",
+                                 help="Delete user and all their projects"):
+                        delete_user(u["id"])
+                        st.rerun()
+
+    st.divider()
+
+    # ── All Projects ──
+    st.header("All Projects")
+    all_projects = get_all_projects()
+
+    if not all_projects:
+        st.info("No projects in the system yet.")
+    else:
+        for proj in all_projects:
+            beam_count = get_beam_count(proj["id"])
+            updated    = proj["updated_at"][:10] if proj.get("updated_at") else "—"
+
+            with st.container(border=True):
+                apc1, apc2, apc3, apc4 = st.columns([2, 4, 3, 1])
+                with apc1:
+                    st.caption(f"👤 {proj.get('username', '?')}")
+                with apc2:
+                    st.markdown(f"**{proj['name']}**")
+                    if proj.get("number"):
+                        st.caption(f"No. {proj['number']}")
+                with apc3:
+                    st.caption(proj.get("address", "—") or "—")
+                    st.caption(f"{beam_count} beam(s)  ·  {updated}")
+                with apc4:
+                    if st.button("Open →", key=f"admin_open_{proj['id']}",
+                                 type="primary", use_container_width=True):
+                        st.session_state.current_project = proj
+                        _load_project_beams(proj["id"])
+                        st.session_state.page = "designer"
+                        st.rerun()
 
 
 def default_beam_state() -> dict:
@@ -156,18 +352,39 @@ def _render_load_panel(active_idx: int, prefix: str, panel_label: str,
 
 
 def main():
+    """App entry point — initialises DB and routes to the correct page."""
+    init_db()
     st.set_page_config(
         page_title="Timber Beam Designer",
         page_icon="\U0001FAB5",
         layout="wide",
     )
 
-    # ── Password gate ──
-    if not check_password():
+    # Route based on login state and current page
+    if "user" not in st.session_state:
+        render_login()
         return
 
+    page = st.session_state.get("page", "dashboard")
+
+    if page == "admin" and st.session_state.user.get("is_admin"):
+        render_admin_dashboard()
+        return
+
+    if page != "designer" or not st.session_state.get("current_project"):
+        render_project_dashboard()
+        return
+
+    render_beam_designer()
+
+
+def render_beam_designer():
+    """Main beam design screen — requires user + current_project in session_state."""
+    proj = st.session_state.current_project
+    user = st.session_state.user
+
     st.title("Timber Beam Designer")
-    st.caption("NZS AS 1720.1:2022 -- Timber Beam Design")
+    st.caption(f"NZS AS 1720.1:2022  ·  Project: **{proj['name']}**")
 
     # ── Multi-beam state initialization ──
     if "beams" not in st.session_state:
@@ -194,11 +411,27 @@ def main():
 
     # ── Sidebar ────────────────────────────────────────────────────
     with st.sidebar:
+        # ── Navigation ──
+        nav_col1, nav_col2 = st.columns(2)
+        with nav_col1:
+            if st.button("← Projects", use_container_width=True):
+                _auto_save()
+                st.session_state.page = "dashboard"
+                st.rerun()
+        with nav_col2:
+            if st.button("Logout", use_container_width=True):
+                _auto_save()
+                st.session_state.clear()
+                st.rerun()
+
+        st.divider()
+
         # ── Beam List ──
         st.header("Beam List")
         col_add, col_remove = st.columns(2)
         with col_add:
             if st.button("\u2795 Add Beam", use_container_width=True):
+                _auto_save()
                 new_beam = default_beam_state()
                 new_beam["name"] = f"Beam {len(beams) + 1}"
                 beams.append(new_beam)
@@ -207,6 +440,7 @@ def main():
         with col_remove:
             if len(beams) > 1:
                 if st.button("\u2796 Remove", use_container_width=True):
+                    _auto_save()
                     beams.pop(active_idx)
                     st.session_state.active_beam_idx = min(active_idx, len(beams) - 1)
                     st.rerun()
@@ -225,6 +459,7 @@ def main():
                 type=btn_type,
                 use_container_width=True,
             ):
+                _auto_save()
                 st.session_state.active_beam_idx = i
                 st.rerun()
 
@@ -233,9 +468,6 @@ def main():
         current_beam = beams[active_idx]
 
         # ── Restore widget states when switching back to this beam ──
-        # Streamlit deletes session_state keys for widgets that are not rendered.
-        # When the user switches beams, the old beam's widget keys are deleted.
-        # We restore them from the beam's saved_inputs dict so values are preserved.
         for _k, _v in current_beam.get("saved_inputs", {}).items():
             if _k not in st.session_state:
                 st.session_state[_k] = _v
@@ -249,14 +481,45 @@ def main():
 
         st.header("Design Inputs")
 
-        # ── Project Information ──
-        with st.expander("Project Information", expanded=True):
-            project_name = st.text_input("Project Name", value="", key=f"b{active_idx}_proj_name")
-            project_number = st.text_input("Project Number", value="", key=f"b{active_idx}_proj_num")
-            project_address = st.text_input("Project Address", value="", key=f"b{active_idx}_proj_addr")
+        # ── Project Information (project-level, editable once for all beams) ──
+        with st.expander("📁 Project Information", expanded=True):
+            _proj = st.session_state.current_project
+            _pk = f"proj_{_proj['id']}"   # project-specific key prefix
+
+            # Initialise keys from DB on first load
+            for _suffix, _default in [
+                ("name",     _proj.get("name", "")),
+                ("number",   _proj.get("number", "")),
+                ("address",  _proj.get("address", "")),
+                ("designer", _proj.get("designer", "")),
+                ("date",     _proj.get("date", "")),
+            ]:
+                if f"{_pk}_{_suffix}" not in st.session_state:
+                    st.session_state[f"{_pk}_{_suffix}"] = _default
+
+            project_name    = st.text_input("Project Name",    key=f"{_pk}_name")
+            project_number  = st.text_input("Project Number",  key=f"{_pk}_number")
+            project_address = st.text_input("Project Address", key=f"{_pk}_address")
+            designer        = st.text_input("Designer Name",   key=f"{_pk}_designer")
+
+            _date_str = st.session_state.get(f"{_pk}_date", "")
+            try:
+                _date_val = date.fromisoformat(_date_str) if _date_str else date.today()
+            except ValueError:
+                _date_val = date.today()
+            design_date = st.date_input("Date", value=_date_val, key=f"{_pk}_date_input")
+
+            if st.button("💾 Save Project Info", use_container_width=True):
+                update_project(
+                    _proj["id"], project_name, project_number,
+                    project_address, designer, design_date.isoformat(),
+                )
+                st.session_state.current_project = get_project(_proj["id"])
+                st.session_state[f"{_pk}_date"] = design_date.isoformat()
+                st.success("Project info saved.")
+
+            # Beam ID is still per-beam
             beam_id = st.text_input("Beam ID", value="", key=f"b{active_idx}_beam_id")
-            designer = st.text_input("Designer Name", value="", key=f"b{active_idx}_designer")
-            design_date = st.date_input("Date", value=date.today(), key=f"b{active_idx}_date")
 
         st.divider()
 
@@ -892,13 +1155,15 @@ def main():
                 "b_m": pl.calc_b(span_m),
             })
 
+    # Pull project-level info from the project record (set once, shared by all beams)
+    _p = st.session_state.current_project
     inputs_dict = {
-        "project_name": project_name,
-        "project_number": project_number,
-        "project_address": project_address,
-        "beam_id": beam_id,
-        "designer": designer,
-        "date": design_date.isoformat(),
+        "project_name":    project_name    or _p.get("name", ""),
+        "project_number":  project_number  or _p.get("number", ""),
+        "project_address": project_address or _p.get("address", ""),
+        "beam_id":         beam_id,
+        "designer":        designer        or _p.get("designer", ""),
+        "date":            design_date.isoformat(),
         "span_m": span_m,
         "beam_type": beam_type,
         "back_span_m": back_span_m,
@@ -947,13 +1212,14 @@ def main():
         current_beam["line_loads_cant"] = line_loads_cant
 
     # ── Persist widget states so they survive beam switches ──
-    # Save all session_state keys belonging to this beam into its dict.
-    # This ensures values are available for restoration when the user returns.
     _pfx = f"b{active_idx}_"
     current_beam["saved_inputs"] = {
         k: v for k, v in st.session_state.items()
         if isinstance(k, str) and k.startswith(_pfx)
     }
+
+    # ── Auto-save to database ──
+    _auto_save()
 
     # ── Main Area: Results ───────────────────────────────────────────
     if all_passed:
